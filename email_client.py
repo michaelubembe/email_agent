@@ -1,9 +1,10 @@
 import os.path
 import base64
+import json
 from email.message import EmailMessage
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
-from google_auth_oauthlib.flow import InstalledAppFlow
+from google_auth_oauthlib.flow import Flow
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 from config import AgentConfig
@@ -40,18 +41,35 @@ class EmailClient:
             print(f"An error occurred: {error}")
             return None
     
+    def _create_flow(self, state=None):
+        """Create OAuth flow instance."""
+        # Ensure base_url doesn't have trailing slash
+        base_url = self.config.base_url.rstrip('/')
+        redirect_uri = f"{base_url}/api/auth/callback"
+        
+        if self.config.google_client_secrets_json:
+            client_config = json.loads(self.config.google_client_secrets_json)
+            return Flow.from_client_config(
+                client_config,
+                scopes=SCOPES,
+                state=state,
+                redirect_uri=redirect_uri
+            )
+        elif os.path.exists(self.config.oauth_credentials_path):
+            return Flow.from_client_secrets_file(
+                self.config.oauth_credentials_path,
+                scopes=SCOPES,
+                state=state,
+                redirect_uri=redirect_uri
+            )
+        else:
+            raise FileNotFoundError(f"No credentials found. Set GOOGLE_CLIENT_SECRETS_JSON env var or create {self.config.oauth_credentials_path}")
+
     def get_auth_url(self):
         """Get OAuth authorization URL for web flow."""
-        if not os.path.exists(self.config.oauth_credentials_path):
-            raise FileNotFoundError(f"Credentials file not found at {self.config.oauth_credentials_path}")
+        flow = self._create_flow()
         
-        self.flow = InstalledAppFlow.from_client_secrets_file(
-            self.config.oauth_credentials_path, SCOPES
-        )
-        # Use the callback URL for web flow
-        self.flow.redirect_uri = 'http://localhost:8000/api/auth/callback'
-        
-        auth_url, _ = self.flow.authorization_url(
+        auth_url, _ = flow.authorization_url(
             access_type='offline',
             include_granted_scopes='true',
             prompt='consent'
@@ -61,13 +79,7 @@ class EmailClient:
     
     def handle_oauth_callback(self, code):
         """Handle OAuth callback and exchange code for credentials."""
-        if not os.path.exists(self.config.oauth_credentials_path):
-            raise FileNotFoundError(f"Credentials file not found at {self.config.oauth_credentials_path}")
-        
-        flow = InstalledAppFlow.from_client_secrets_file(
-            self.config.oauth_credentials_path, SCOPES
-        )
-        flow.redirect_uri = 'http://localhost:8000/api/auth/callback'
+        flow = self._create_flow()
         
         # Exchange authorization code for credentials
         flow.fetch_token(code=code)
